@@ -25,18 +25,35 @@ async def entrypoint(ctx: JobContext):
     # Reload config fresh for every incoming call/session
     config = load_config()
 
-    system_prompt = config["system_prompt"]
-    greeting = config["greeting"]
+    agent_name = config.get("agent_name", "Agent")
     voice_id = config.get("voice_id") or "Puck"
+
+    # Only expose tools that are listed in enabled_tools
+    enabled = set(config.get("enabled_tools", []))
+    active_tools = [fn for name, fn in ALL_TOOLS.items() if name in enabled]
+
+    # Resolve {{agent_name}} placeholder in both text fields
+    greeting = config["greeting"].replace("{{agent_name}}", agent_name)
+    system_prompt = config["system_prompt"].replace("{{agent_name}}", agent_name)
+
+    # Append the live tool list so the LLM knows its exact boundaries
+    tool_lines = "\n".join(f"- {name}" for name in sorted(enabled)) or "- (no tools enabled)"
+    system_prompt += f"\n\nACTIVE TOOLS (you may ONLY use these):\n{tool_lines}"
+
+    # Explicitly forbid disabled tools so the LLM cannot hallucinate their outcome
+    disabled = set(ALL_TOOLS.keys()) - enabled
+    if disabled:
+        disabled_lines = "\n".join(f"- {name}" for name in sorted(disabled))
+        system_prompt += (
+            f"\n\nDISABLED TOOLS — these actions are NOT available in this session."
+            f" Never offer, simulate, or verbally confirm them. "
+            f"If asked, say the service is currently unavailable and offer an active alternative:\n{disabled_lines}"
+        )
 
     api_key = os.environ.get("GOOGLE_API_KEY")
     if not api_key:
         raise RuntimeError("GOOGLE_API_KEY is not set — check your .env file")
     logger.info("GOOGLE_API_KEY loaded (len=%d)", len(api_key))
-
-    # Only expose tools that are listed in enabled_tools
-    enabled = set(config.get("enabled_tools", []))
-    active_tools = [fn for name, fn in ALL_TOOLS.items() if name in enabled]
 
     assistant = Agent(instructions=system_prompt)
     await assistant.update_tools(active_tools)
