@@ -10,8 +10,10 @@ Endpoints:
     PATCH /config  → merge provided fields into config.json (partial update)
 """
 
+import json
 import logging
 import os
+from pathlib import Path
 from typing import Any, Optional
 
 from dotenv import load_dotenv
@@ -21,6 +23,9 @@ from pydantic import BaseModel, Field
 from livekit import api as lk_api
 
 from config import read_config, write_config
+from repositories import JsonAppointmentRepository
+
+_appointments_repo = JsonAppointmentRepository()
 
 load_dotenv()
 
@@ -108,6 +113,23 @@ async def generate_token(room: str = "test-room", identity: str = "admin") -> di
         )
     )
     return {"token": token.to_jwt(), "url": livekit_url}
+
+
+@app.get("/appointments", summary="List booked appointments")
+async def list_appointments(date: str | None = None) -> dict[str, Any]:
+    """Return all booked appointments, optionally filtered by date (YYYY-MM-DD)."""
+    appointments = _appointments_repo.list_appointments(date)
+    return {"appointments": appointments, "count": len(appointments)}
+
+
+@app.get("/metrics", summary="Agent response latency metrics")
+async def get_metrics() -> dict[str, Any]:
+    """Return aggregated ping statistics written by the agent worker after each turn."""
+    metrics_path = Path(__file__).parent / "metrics.json"
+    if not metrics_path.exists():
+        return {"message": "No calls recorded yet. Make a test call first."}
+    with open(metrics_path) as f:
+        return json.load(f)
 
 
 @app.get("/health", summary="Health check")

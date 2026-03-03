@@ -43,12 +43,16 @@ def make_book_appointment(repo: AppointmentRepository):
         date: Annotated[str, "Appointment date in YYYY-MM-DD format, e.g. 2026-03-10"],
         time: Annotated[str, "Appointment time in HH:MM format, e.g. 14:30"],
         patient_name: Annotated[str, "Patient's full name"],
+        phone_number: Annotated[str, "Patient's phone number, e.g. +1 555 123 4567"],
     ) -> str:
-        """Confirm and register an appointment for the patient. Only use this after obtaining the date, time, and patient's full name."""
-        logger.info("book_appointment | patient=%s | date=%s | time=%s", patient_name, date, time)
+        """Confirm and register an appointment for the patient. Only use this after obtaining the date, time, patient's full name, and phone number."""
+        logger.info(
+            "book_appointment | patient=%s | phone=%s | date=%s | time=%s",
+            patient_name, phone_number, date, time,
+        )
 
         try:
-            repo.save_appointment(date, time, patient_name)
+            repo.save_appointment(date, time, patient_name, phone_number)
         except ValueError:
             return (
                 f"The {time} slot on {date} has already been booked. "
@@ -66,7 +70,8 @@ def make_book_appointment(repo: AppointmentRepository):
         return (
             f"Your appointment has been confirmed for {patient_name} "
             f"on {date_display} at {time}. "
-            "You will receive a confirmation shortly. Is there anything else I can help you with?"
+            f"We will contact you at {phone_number} if needed. "
+            "Is there anything else I can help you with?"
         )
 
     return function_tool(book_appointment)
