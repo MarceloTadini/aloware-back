@@ -1,0 +1,11 @@
+# LiveKit Agents framework + plugins
+livekit-agents[google,silero]==1.4.4
+livekit-plugins-google==1.4.4
+
+# Environment variable management
+python-dotenv>=1.0.0
+
+# FastAPI config sync API
+fastapi>=0.111.0
+uvicorn[standard]>=0.29.0
+pydantic>=2.0.0

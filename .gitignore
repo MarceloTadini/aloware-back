@@ -1,0 +1,14 @@
+# Ambientes virtuais
+venv/
+.venv/
+env/
+ENV/
+
+# Byte-compiled / arquivos de cache
+__pycache__/
+*.py[cod]
+
+# Distribuição / pacotes
+dist/
+build/
+*.egg-info/.env
