@@ -25,9 +25,11 @@ Caller
          ▲ reads on every call
          │
      config.json  ←──  PATCH /config  ←── React Frontend
+                                              │
+                                     appointments.json  ←── book_appointment tool
 ```
 
-The agent **reloads `config.json` on every incoming call**, so any change made through the API takes effect on the next call without restarting the worker.
+The agent **reloads `config.json` on every incoming call**, so any change made through the API takes effect on the next call without restarting the worker. Every confirmed appointment is **persisted to `appointments.json`** and survives process restarts.
 
 ---
 
@@ -35,15 +37,17 @@ The agent **reloads `config.json` on every incoming call**, so any change made t
 
 ```
 backend/
-├── agent.py             # LiveKit worker — voice pipeline entrypoint
-├── tools.py             # LLM-callable clinic tools (factory functions)
-├── repositories.py      # AppointmentRepository ABC + InMemoryAppointmentRepository
-├── api.py               # FastAPI server — config sync for the frontend
-├── config.py            # CONFIG_PATH, load_config(), read_config(), write_config()
-├── config.json          # Runtime agent configuration
-├── requirements.txt     # Python dependencies
-├── .env.example         # Environment variable template
-└── .env                 # API keys (not committed)
+├── agent.py              # LiveKit worker — voice pipeline entrypoint
+├── tools.py              # LLM-callable clinic tools (factory functions)
+├── repositories.py       # AppointmentRepository ABC + JsonAppointmentRepository
+├── api.py                # FastAPI server — config, appointments, metrics, token
+├── config.py             # CONFIG_PATH, load_config(), read_config(), write_config()
+├── config.json           # Runtime agent configuration
+├── appointments.json     # Persisted bookings (auto-created on first booking)
+├── metrics.json          # Latency stats (auto-created on first call)
+├── requirements.txt      # Python dependencies
+├── .env.example          # Environment variable template
+└── .env                  # API keys (not committed)
 ```
 
 ---
@@ -100,6 +104,63 @@ uvicorn api:app --reload --port 8000
 
 ---
 
+## How Appointment Booking Works (Step by Step)
+
+When a caller asks to book an appointment, the following sequence happens:
+
+**1. Patient expresses intent**
+> *"I'd like to schedule an appointment."*
+
+The agent recognises the intent and knows it must collect four pieces of information before it can confirm anything.
+
+**2. Agent collects the date**
+> *"Of course! What date would you like?"*
+
+The patient says a date (e.g. "next Tuesday" or "March 10th"). The agent converts it to `YYYY-MM-DD` format internally.
+
+**3. Agent checks availability (optional but recommended)**
+
+The agent calls `check_availability` for that date. It reads `appointments.json` to find already-taken slots and returns the remaining open times to the patient.
+
+> *"For March 10th we have: 09:00, 10:00, 14:30, 15:00. Which time works best for you?"*
+
+**4. Patient chooses a time**
+> *"14:30, please."*
+
+**5. Agent collects the patient's full name**
+> *"And your full name, please?"*
+
+**6. Agent collects the patient's phone number**
+> *"What is the best phone number to reach you?"*
+
+**7. Agent calls `book_appointment`**
+
+Once all four fields are collected (`date`, `time`, `patient_name`, `phone_number`), the agent calls the `book_appointment` function tool. The tool:
+
+- Reads `appointments.json`
+- Checks that the slot is still free (conflict prevention)
+- Appends the new entry and overwrites the file
+- Returns a confirmation string to the LLM
+
+**8. Agent confirms verbally**
+> *"Your appointment has been confirmed for [Name] on March 10th at 14:30. We will contact you at [phone] if needed. Is there anything else I can help you with?"*
+
+**9. Entry saved in `appointments.json`**
+
+```json
+{
+  "date": "2026-03-10",
+  "time": "14:30",
+  "patient": "João Silva",
+  "phone": "+55 11 91234-5678",
+  "created_at": "2026-03-03T14:31:07"
+}
+```
+
+The entry persists across agent restarts. On the next call, `check_availability` will correctly exclude that slot.
+
+---
+
 ## Config API Reference
 
 Base URL: `http://localhost:8000`
@@ -116,56 +177,18 @@ Returns the current agent configuration.
 ```json
 {
   "agent_name": "Ana",
-  "greeting": "Hello! I'm Ana, Aloware Health's virtual receptionist. How can I help you today?",
-  "voice_id": "a0e99841-438c-4a64-b679-ae501e7d6091",
+  "greeting": "Hello! I'm {{agent_name}}, Aloware Health's virtual receptionist. How can I help you today?",
+  "voice_id": "Kore",
   "enabled_tools": ["check_availability", "book_appointment", "transfer_to_human"],
-  "system_prompt": "You are Ana..."
+  "system_prompt": "You are {{agent_name}}..."
 }
-```
-
----
-
-### `POST /config`
-
-**Fully replaces** the configuration. Any field not included in the request body is removed from `config.json`.
-
-**Request body** (all fields optional, but at least one required):
-```json
-{
-  "agent_name": "string",
-  "greeting": "string",
-  "voice_id": "string",
-  "system_prompt": "string",
-  "enabled_tools": ["check_availability", "book_appointment", "transfer_to_human"]
-}
-```
-
-**Response `200 OK`**
-```json
-{
-  "status": "ok",
-  "config": { "...updated config..." }
-}
-```
-
-**Example — change the greeting:**
-```bash
-curl -X POST http://localhost:8000/config \
-  -H "Content-Type: application/json" \
-  -d '{
-    "agent_name": "Ana",
-    "greeting": "Good morning! Aloware Health, how may I help you?",
-    "voice_id": "a0e99841-438c-4a64-b679-ae501e7d6091",
-    "enabled_tools": ["check_availability", "book_appointment", "transfer_to_human"],
-    "system_prompt": "You are Ana..."
-  }'
 ```
 
 ---
 
 ### `PATCH /config`
 
-**Merges** the provided fields into the existing config. Fields not included in the request body are preserved as-is.
+**Merges** the provided fields into the existing config. Fields not included are preserved.
 
 **Request body** (at least one field required):
 ```json
@@ -192,6 +215,78 @@ curl -X PATCH http://localhost:8000/config \
 
 ---
 
+### `POST /config`
+
+**Fully replaces** the configuration. Any field not included is removed from `config.json`.
+
+```bash
+curl -X POST http://localhost:8000/config \
+  -H "Content-Type: application/json" \
+  -d '{
+    "agent_name": "Ana",
+    "greeting": "Good morning! Aloware Health, how may I help you?",
+    "voice_id": "Kore",
+    "enabled_tools": ["check_availability", "book_appointment", "transfer_to_human"],
+    "system_prompt": "You are {{agent_name}}..."
+  }'
+```
+
+---
+
+### `GET /appointments`
+
+Returns all booked appointments, optionally filtered by date.
+
+```bash
+# All appointments
+curl http://localhost:8000/appointments
+
+# Filtered by date
+curl "http://localhost:8000/appointments?date=2026-03-10"
+```
+
+**Response `200 OK`**
+```json
+{
+  "count": 2,
+  "appointments": [
+    {
+      "date": "2026-03-10",
+      "time": "09:00",
+      "patient": "João Silva",
+      "phone": "+55 11 91234-5678",
+      "created_at": "2026-03-03T14:05:22"
+    }
+  ]
+}
+```
+
+---
+
+### `GET /metrics`
+
+Returns aggregated response latency statistics collected during the current agent session.
+
+```bash
+curl http://localhost:8000/metrics
+```
+
+**Response `200 OK`**
+```json
+{
+  "count": 7,
+  "last_ms": 312,
+  "mean_ms": 389,
+  "min_ms": 271,
+  "max_ms": 601,
+  "p50_ms": 350,
+  "p95_ms": 580,
+  "last_updated": "2026-03-03T14:22:01Z"
+}
+```
+
+---
+
 ### `GET /health`
 
 Simple liveness check.
@@ -207,9 +302,9 @@ Simple liveness check.
 
 | Field | Type | Description |
 |---|---|---|
-| `agent_name` | `string` | Display name of the agent (e.g. `"Ana"`) |
+| `agent_name` | `string` | Display name of the agent — use `{{agent_name}}` as placeholder in `greeting` and `system_prompt` |
 | `greeting` | `string` | First sentence spoken to every caller |
-| `voice_id` | `string` | Cartesia voice ID for TTS synthesis |
+| `voice_id` | `string` | Google / LiveKit voice ID for audio synthesis |
 | `system_prompt` | `string` | Full LLM system prompt, including guardrails |
 | `enabled_tools` | `string[]` | Tools exposed to the LLM (see below) |
 
@@ -217,11 +312,11 @@ Simple liveness check.
 
 | Tool name | What it does |
 |---|---|
-| `check_availability` | Returns mock open slots for a given date |
-| `book_appointment` | Logs and confirms an appointment booking |
-| `transfer_to_human` | Simulates transferring the call to a human agent |
+| `check_availability` | Returns open time slots for a given date, excluding already-booked ones |
+| `book_appointment` | Collects name, phone, date and time — saves to `appointments.json` |
+| `transfer_to_human` | Transfers the call to a human agent |
 
-Remove a tool name from `enabled_tools` to hide it from the LLM entirely.
+Remove a tool name from `enabled_tools` to hide it from the LLM entirely. Disabled tools are also explicitly listed in the system prompt so the model cannot hallucinate their outcome.
 
 ---
 
@@ -245,8 +340,14 @@ To adjust the guardrails, update `system_prompt` via `PATCH /config`.
 
 ```
 User speaks → VAD (Silero) detects speech end
-           → LLM (Google Gemini 2.5 Flash — native audio) generates a response / calls a tool
+           → LLM (Google Gemini 2.5 Flash — native audio) generates response / calls a tool
            → Audio streamed back to the user
 ```
 
-The agent uses Gemini's native audio mode, which handles speech understanding and synthesis end-to-end — no separate STT or TTS service is required. Silero VAD detects when the user has finished speaking before the audio is sent for processing.
+The agent uses Gemini's native audio mode, which handles speech understanding and synthesis end-to-end — no separate STT or TTS service is required. Silero VAD detects when the user has finished speaking before audio is sent for processing.
+
+---
+
+## Reconnection Behaviour
+
+The agent uses `ctx.add_participant_entrypoint()` so a **fresh session is started automatically every time a participant joins** — including reconnects. There is no need to restart the worker process between calls. Each reconnection reloads `config.json`, so any configuration change takes effect immediately on the next call.
