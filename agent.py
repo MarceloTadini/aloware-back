@@ -44,7 +44,6 @@ def _record_ping(ping_ms: float) -> None:
         logger.warning("Could not write metrics.json: %s", e)
 
 
-# Use absolute path so the subprocess always finds .env regardless of cwd
 load_dotenv(Path(__file__).parent / ".env")
 
 logging.basicConfig(level=logging.INFO)
@@ -55,25 +54,22 @@ async def _handle_participant(ctx: JobContext, participant: rtc.RemoteParticipan
     """Called every time a human participant joins — including reconnects."""
     logger.info("Participant connected: %s", participant.identity)
 
-    # Reload config fresh on every connection so API changes take effect immediately
     config = load_config()
 
     agent_name = config.get("agent_name", "Agent")
     voice_id = config.get("voice_id") or "Puck"
 
-    # Only expose tools that are listed in enabled_tools
     enabled = set(config.get("enabled_tools", []))
     active_tools = [fn for name, fn in ALL_TOOLS.items() if name in enabled]
 
-    # Resolve {{agent_name}} placeholder in both text fields
+   
     greeting = config["greeting"].replace("{{agent_name}}", agent_name)
     system_prompt = config["system_prompt"].replace("{{agent_name}}", agent_name)
 
-    # Append the live tool list so the LLM knows its exact boundaries
+    
     tool_lines = "\n".join(f"- {name}" for name in sorted(enabled)) or "- (no tools enabled)"
     system_prompt += f"\n\nACTIVE TOOLS (you may ONLY use these):\n{tool_lines}"
 
-    # Explicitly forbid disabled tools so the LLM cannot hallucinate their outcome
     disabled = set(ALL_TOOLS.keys()) - enabled
     if disabled:
         disabled_lines = "\n".join(f"- {name}" for name in sorted(disabled))
@@ -117,8 +113,6 @@ async def _handle_participant(ctx: JobContext, participant: rtc.RemoteParticipan
 
 
 async def entrypoint(ctx: JobContext):
-    # Register the handler before connecting so it also fires for participants
-    # already in the room when the agent joins, and for every future reconnect.
     ctx.add_participant_entrypoint(_handle_participant)
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
 

@@ -1,15 +1,3 @@
-"""
-FastAPI sync server — lets the React frontend read and update config.json.
-
-Run independently from the agent:
-    uvicorn api:app --reload --port 8000
-
-Endpoints:
-    GET   /config  → return current config.json contents
-    POST  /config  → replace config.json with the provided body
-    PATCH /config  → merge provided fields into config.json (partial update)
-"""
-
 import json
 import logging
 import os
