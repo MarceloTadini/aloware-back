@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import uuid
 from pathlib import Path
 from typing import Any, Optional
 
@@ -84,7 +85,7 @@ async def patch_config(payload: AgentConfig) -> dict[str, Any]:
 
 
 @app.get("/token", summary="Generate a LiveKit JWT for browser test calls")
-async def generate_token(room: str = "test-room", identity: str = "admin") -> dict[str, str]:
+async def generate_token(room: str | None = None, identity: str = "admin") -> dict[str, str]:
     """Return a short-lived LiveKit token so the React widget can join the room."""
     api_key = os.environ.get("LIVEKIT_API_KEY")
     api_secret = os.environ.get("LIVEKIT_API_SECRET")
@@ -92,8 +93,9 @@ async def generate_token(room: str = "test-room", identity: str = "admin") -> di
     if not (api_key and api_secret and livekit_url):
         raise HTTPException(status_code=500, detail="LiveKit credentials not configured")
 
+    room_name = room or f"call-{uuid.uuid4().hex[:8]}"
     token = lk_api.AccessToken(api_key=api_key, api_secret=api_secret)
-    token.with_grants(lk_api.VideoGrants(room_join=True, room=room))
+    token.with_grants(lk_api.VideoGrants(room_join=True, room=room_name))
     token.with_identity(identity)
     token.with_room_config(
         lk_api.RoomConfiguration(
